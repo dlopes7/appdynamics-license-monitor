@@ -1,0 +1,21 @@
+{
+    "controllers": [{
+            "name": "David's Mac",
+            "host": "192.168.33.10",
+            "port": 8090,
+            "user": "admin",
+            "account": "customer1",
+            "password": "password",
+            "protocol": "http"
+        },
+        {
+            "name": "David's Other Controller",
+            "host": "192.168.33.11",
+            "port": 8090,
+            "user": "admin",
+            "account": "customer1",
+            "password": "password",
+            "protocol": "http"
+        }
+    ]
+}
