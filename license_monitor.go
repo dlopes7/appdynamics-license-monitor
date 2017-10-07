@@ -96,6 +96,7 @@ func process(controller Controller) {
 	getJSON(controller, url, target)
 
 	for _, element := range target.Properties {
+		// fmt.Println(element)
 		if element.Name == "expiry-date" {
 			value, err := strconv.ParseInt(element.Value, 10, 64)
 			if err != nil {
