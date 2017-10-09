@@ -8,6 +8,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	models "github.com/dlopes7/license_monitor/models"
 )
 
 // Account : struct used to get the Account details
@@ -26,25 +28,9 @@ type Property struct {
 	Value string `json:"value"`
 }
 
-// Controllers : List of controllers to monitor
-type Controllers struct {
-	Controllers []Controller `json:"controllers"`
-}
-
-// Controller : struct used for the Controller connection
-type Controller struct {
-	Name     string `json:"name"`
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	User     string `json:"user"`
-	Password string `json:"password"`
-	Account  string `json:"account"`
-	Protocol string `json:"protocol"`
-}
-
 var myClient = &http.Client{Timeout: 10 * time.Second}
 
-func getAccountID(controller Controller) string {
+func getAccountID(controller models.Controller) string {
 
 	urlTemplate := "%s://%s:%d/controller/api/accounts/myaccount"
 	url := fmt.Sprintf(urlTemplate, controller.Protocol, controller.Host, controller.Port)
@@ -55,7 +41,7 @@ func getAccountID(controller Controller) string {
 	return acc.ID
 }
 
-func getJSON(controller Controller, url string, target interface{}) error {
+func getJSON(controller models.Controller, url string, target interface{}) error {
 	username := fmt.Sprintf("%s@%s", controller.User, controller.Account)
 	password := controller.Password
 
@@ -84,7 +70,7 @@ func differenceFromNow(timeToCompare int64) int64 {
 	return differenceHours
 }
 
-func process(controller Controller) {
+func process(controller models.Controller) {
 
 	accID := getAccountID(controller)
 
@@ -108,15 +94,18 @@ func process(controller Controller) {
 	}
 }
 
-func getControllersFromJSON() Controllers {
+func getControllersFromJSON() models.Controllers {
 	file := "./conf.json"
 	raw, err := ioutil.ReadFile(file)
 	if err != nil {
 		panic(err.Error())
 	}
 
-	var controllers Controllers
-	json.Unmarshal(raw, &controllers)
+	var controllers models.Controllers
+	err = json.Unmarshal(raw, &controllers)
+	if err != nil {
+		panic(err.Error())
+	}
 	return controllers
 }
 
