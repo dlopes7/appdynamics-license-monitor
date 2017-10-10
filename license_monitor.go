@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	models "github.com/dlopes7/license_monitor/models"
@@ -20,6 +22,7 @@ var templatesMetrics = map[string]string{
 }
 
 var myClient = &http.Client{Timeout: 10 * time.Second}
+var wg sync.WaitGroup
 
 func getAccountID(controller models.Controller) string {
 
@@ -69,10 +72,13 @@ func differenceFromNow(timeToCompare int64) int64 {
 
 func processLink(controller models.Controller, agentType string, link models.Link) {
 
+	defer wg.Done()
+
 	if link.Name == "usages" {
 		params := "?showfiveminutesresolution=true"
 		usages := new(models.Usages)
-		fromJSONtoModel(controller, link.Href+params, usages)
+		url := strings.Replace(link.Href, "http", controller.Protocol, 1) + params
+		fromJSONtoModel(controller, url, usages)
 
 		if len(usages.Usages) == 0 {
 			fmt.Printf(templatesMetrics["units-used"], controller.Name, agentType, 0)
@@ -83,7 +89,8 @@ func processLink(controller models.Controller, agentType string, link models.Lin
 
 	} else if link.Name == "properties" {
 		properties := new(models.Properties)
-		err := fromJSONtoModel(controller, link.Href, properties)
+		url := strings.Replace(link.Href, "http", controller.Protocol, 1)
+		err := fromJSONtoModel(controller, url, properties)
 		if err == nil {
 			for _, property := range properties.Properties {
 
@@ -102,6 +109,7 @@ func processLink(controller models.Controller, agentType string, link models.Lin
 		}
 
 	}
+
 }
 
 func processLicenseModules(controller models.Controller, accID string) {
@@ -113,13 +121,15 @@ func processLicenseModules(controller models.Controller, accID string) {
 	fromJSONtoModel(controller, url, licenseModules)
 
 	for _, licenseModule := range licenseModules.LicenseModules {
+		wg.Add(len(licenseModule.Links))
 		for _, link := range licenseModule.Links {
 
-			processLink(controller, licenseModule.Name, link)
+			go processLink(controller, licenseModule.Name, link)
 
 		}
 
 	}
+	wg.Wait()
 }
 
 func process(controller models.Controller) {
