@@ -27,12 +27,12 @@ func getAccountID(controller models.Controller) string {
 	url := fmt.Sprintf(urlTemplate, controller.Protocol, controller.Host, controller.Port)
 
 	acc := new(models.Account)
-	getJSON(controller, url, acc)
+	fromJSONtoModel(controller, url, acc)
 
 	return acc.ID
 }
 
-func getJSON(controller models.Controller, url string, target interface{}) error {
+func fromJSONtoModel(controller models.Controller, url string, target interface{}) error {
 	username := fmt.Sprintf("%s@%s", controller.User, controller.Account)
 	password := controller.Password
 
@@ -72,7 +72,7 @@ func processLink(controller models.Controller, agentType string, link models.Lin
 	if link.Name == "usages" {
 		params := "?showfiveminutesresolution=true"
 		usages := new(models.Usages)
-		getJSON(controller, link.Href+params, usages)
+		fromJSONtoModel(controller, link.Href+params, usages)
 
 		if len(usages.Usages) == 0 {
 			fmt.Printf(templatesMetrics["units-used"], controller.Name, agentType, 0)
@@ -83,7 +83,7 @@ func processLink(controller models.Controller, agentType string, link models.Lin
 
 	} else if link.Name == "properties" {
 		properties := new(models.Properties)
-		err := getJSON(controller, link.Href, properties)
+		err := fromJSONtoModel(controller, link.Href, properties)
 		if err == nil {
 			for _, property := range properties.Properties {
 
@@ -110,7 +110,7 @@ func processLicenseModules(controller models.Controller, accID string) {
 
 	licenseModules := new(models.LicenseModules)
 
-	getJSON(controller, url, licenseModules)
+	fromJSONtoModel(controller, url, licenseModules)
 
 	for _, licenseModule := range licenseModules.LicenseModules {
 		for _, link := range licenseModule.Links {
