@@ -12,20 +12,11 @@ import (
 	models "github.com/dlopes7/license_monitor/models"
 )
 
-// Account : struct used to get the Account details
-type Account struct {
-	ID string `json:"id"`
-}
-
-// Properties : this is a list of Property
-type Properties struct {
-	Properties []Property `json:"properties"`
-}
-
-// Property : this is a Property of a license
-type Property struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
+var templatesMetrics = map[string]string{
+	"units-used":                     "name=Custom Metrics|Licensing|%s|Agents|%s|Units Used,value=%d\n",
+	"maximum-allowed-licenses":       "name=Custom Metrics|Licensing|%s|Agents|%s|Units Allowed,value=%s\n",
+	"number-of-provisioned-licenses": "name=Custom Metrics|Licensing|%s|Agents|%s|Units Provisioned,value=%s\n",
+	"hours-to-expire":                "name=Custom Metrics|Licensing|%s|Agents|%s|Hours to Expire,value=%d\n",
 }
 
 var myClient = &http.Client{Timeout: 10 * time.Second}
@@ -35,7 +26,7 @@ func getAccountID(controller models.Controller) string {
 	urlTemplate := "%s://%s:%d/controller/api/accounts/myaccount"
 	url := fmt.Sprintf(urlTemplate, controller.Protocol, controller.Host, controller.Port)
 
-	acc := new(Account)
+	acc := new(models.Account)
 	getJSON(controller, url, acc)
 
 	return acc.ID
@@ -51,15 +42,17 @@ func getJSON(controller models.Controller, url string, target interface{}) error
 	}
 
 	req.SetBasicAuth(username, password)
+
 	resp, err := myClient.Do(req)
 	if err != nil {
 		panic(err.Error())
 	}
-	if resp.StatusCode > 400 {
-		panic(fmt.Sprintf("Error accessing the API %d", resp.StatusCode))
-	}
 
 	defer resp.Body.Close()
+	if resp.StatusCode > 400 {
+		err := fmt.Errorf("Error accessing the API %d", resp.StatusCode)
+		return err
+	}
 
 	return json.NewDecoder(resp.Body).Decode(target)
 }
@@ -67,31 +60,73 @@ func getJSON(controller models.Controller, url string, target interface{}) error
 func differenceFromNow(timeToCompare int64) int64 {
 	now := time.Now().Unix() * 1000
 	differenceHours := (timeToCompare - now) / 1000 / 60 / 60
+
+	if differenceHours < 0 {
+		differenceHours = 0
+	}
 	return differenceHours
+}
+
+func processLink(controller models.Controller, agentType string, link models.Link) {
+
+	if link.Name == "usages" {
+		params := "?showfiveminutesresolution=true"
+		usages := new(models.Usages)
+		getJSON(controller, link.Href+params, usages)
+
+		if len(usages.Usages) == 0 {
+			fmt.Printf(templatesMetrics["units-used"], controller.Name, agentType, 0)
+		} else {
+			mostRecentUsage := usages.Usages[len(usages.Usages)-1]
+			fmt.Printf(templatesMetrics["units-used"], controller.Name, agentType, mostRecentUsage.UnitsUsed)
+		}
+
+	} else if link.Name == "properties" {
+		properties := new(models.Properties)
+		err := getJSON(controller, link.Href, properties)
+		if err == nil {
+			for _, property := range properties.Properties {
+
+				if val, ok := templatesMetrics[property.Name]; ok {
+					fmt.Printf(val, controller.Name, agentType, property.Value)
+				}
+				if property.Name == "expiry-date" {
+					value, err := strconv.ParseInt(property.Value, 10, 64)
+					if err != nil {
+						panic(err.Error())
+					}
+					fmt.Printf(templatesMetrics["hours-to-expire"], controller.Name, agentType, differenceFromNow(value))
+				}
+
+			}
+		}
+
+	}
+}
+
+func processLicenseModules(controller models.Controller, accID string) {
+	urlTemplate := "%s://%s:%d/controller/api/accounts/%s/licensemodules"
+	url := fmt.Sprintf(urlTemplate, controller.Protocol, controller.Host, controller.Port, accID)
+
+	licenseModules := new(models.LicenseModules)
+
+	getJSON(controller, url, licenseModules)
+
+	for _, licenseModule := range licenseModules.LicenseModules {
+		for _, link := range licenseModule.Links {
+
+			processLink(controller, licenseModule.Name, link)
+
+		}
+
+	}
 }
 
 func process(controller models.Controller) {
 
 	accID := getAccountID(controller)
+	processLicenseModules(controller, accID)
 
-	urlTemplate := "%s://%s:%d/controller/api/accounts/%s/licensemodules/java/properties"
-	url := fmt.Sprintf(urlTemplate, controller.Protocol, controller.Host, controller.Port, accID)
-
-	target := new(Properties)
-
-	getJSON(controller, url, target)
-
-	for _, element := range target.Properties {
-		// fmt.Println(element)
-		if element.Name == "expiry-date" {
-			value, err := strconv.ParseInt(element.Value, 10, 64)
-			if err != nil {
-				panic(err.Error())
-			}
-			diff := differenceFromNow(value)
-			fmt.Printf("name=Custom Metrics|Licensing|%s|Hours Remaining,value=%d\n", controller.Name, diff)
-		}
-	}
 }
 
 func getControllersFromJSON() models.Controllers {
