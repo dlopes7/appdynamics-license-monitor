@@ -129,10 +129,10 @@ func processLicenseModules(controller models.Controller, accID string) {
 		}
 
 	}
-	wg.Wait()
 }
 
 func process(controller models.Controller) {
+	defer wg.Done()
 
 	accID := getAccountID(controller)
 	processLicenseModules(controller, accID)
@@ -157,9 +157,10 @@ func getControllersFromJSON() models.Controllers {
 func main() {
 
 	controllers := getControllersFromJSON()
-
+	wg.Add(len(controllers.Controllers))
 	for _, controller := range controllers.Controllers {
-		process(controller)
+		go process(controller)
 	}
+	wg.Wait()
 	os.Exit(0)
 }
