@@ -4,60 +4,34 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
-	models "github.com/dlopes7/license_monitor/models"
+	"github.com/dlopes7/go-appdynamics-rest-api/appdrest"
 )
 
 var templatesMetrics = map[string]string{
-	"units-used":                     "name=Custom Metrics|Licensing|%s|Agents|%s|Units Used,value=%d\n",
-	"maximum-allowed-licenses":       "name=Custom Metrics|Licensing|%s|Agents|%s|Units Allowed,value=%s\n",
-	"number-of-provisioned-licenses": "name=Custom Metrics|Licensing|%s|Agents|%s|Units Provisioned,value=%s\n",
-	"hours-to-expire":                "name=Custom Metrics|Licensing|%s|Agents|%s|Hours to Expire,value=%d\n",
+	"units-used":                     "name=Custom Metrics|Licensing|%s|%s|Agents|%s|Units Used,value=%d\n",
+	"maximum-allowed-licenses":       "name=Custom Metrics|Licensing|%s|%s|Agents|%s|Units Allowed,value=%s\n",
+	"number-of-provisioned-licenses": "name=Custom Metrics|Licensing|%s|%s|Agents|%s|Units Provisioned,value=%s\n",
+	"hours-to-expire":                "name=Custom Metrics|Licensing|%s|%s|Agents|%s|Hours to Expire,value=%d\n",
 }
 
-var myClient = &http.Client{Timeout: 10 * time.Second}
-var wg sync.WaitGroup
-
-func getAccountID(controller models.Controller) string {
-
-	urlTemplate := "%s://%s:%d/controller/api/accounts/myaccount"
-	url := fmt.Sprintf(urlTemplate, controller.Protocol, controller.Host, controller.Port)
-
-	acc := new(models.Account)
-	fromJSONtoModel(controller, url, acc)
-
-	return acc.ID
-}
-
-func fromJSONtoModel(controller models.Controller, url string, target interface{}) error {
-	username := fmt.Sprintf("%s@%s", controller.User, controller.Account)
-	password := controller.Password
-
-	req, err := http.NewRequest("GET", url, nil)
+func getControllersFromJSON() []*appdrest.Controller {
+	file := "./conf.json"
+	raw, err := ioutil.ReadFile(file)
 	if err != nil {
 		panic(err.Error())
 	}
 
-	req.SetBasicAuth(username, password)
-
-	resp, err := myClient.Do(req)
+	var controllers []*appdrest.Controller
+	err = json.Unmarshal(raw, &controllers)
 	if err != nil {
 		panic(err.Error())
 	}
-
-	defer resp.Body.Close()
-	if resp.StatusCode > 400 {
-		err := fmt.Errorf("Error accessing the API %d", resp.StatusCode)
-		return err
-	}
-
-	return json.NewDecoder(resp.Body).Decode(target)
+	return controllers
 }
 
 func differenceFromNow(timeToCompare int64) int64 {
@@ -70,96 +44,79 @@ func differenceFromNow(timeToCompare int64) int64 {
 	return differenceHours
 }
 
-func processLink(controller models.Controller, agentType string, link models.Link) {
-
+func report(client *appdrest.Client) {
 	defer wg.Done()
+	acc, err := client.Account.GetMyAccount()
+	if err != nil {
+		panic(err.Error())
+	}
 
-	if link.Name == "usages" {
-		params := "?showfiveminutesresolution=true"
-		usages := new(models.Usages)
-		url := strings.Replace(link.Href, "http", controller.Protocol, 1) + params
-		fromJSONtoModel(controller, url, usages)
+	licenseModules, err := client.Account.GetLicenseModules(acc.ID)
+	if err != nil {
+		panic(err.Error())
+	}
 
-		if len(usages.Usages) == 0 {
-			fmt.Printf(templatesMetrics["units-used"], controller.Name, agentType, 0)
-		} else {
-			mostRecentUsage := usages.Usages[len(usages.Usages)-1]
-			fmt.Printf(templatesMetrics["units-used"], controller.Name, agentType, mostRecentUsage.UnitsUsed)
-		}
+	wg.Add(len(licenseModules))
+	for _, licenseModule := range licenseModules {
+		defer wg.Done()
 
-	} else if link.Name == "properties" {
-		properties := new(models.Properties)
-		url := strings.Replace(link.Href, "http", controller.Protocol, 1)
-		err := fromJSONtoModel(controller, url, properties)
-		if err == nil {
-			for _, property := range properties.Properties {
+		go func(licenseModule *appdrest.LicenseModule) {
+			wg.Add(1)
+			defer wg.Done()
+			properties, err := client.Account.GetLicenseProperties(acc.ID, licenseModule.Name)
+			if err != nil {
+				if err.(*appdrest.APIError).Code != 404 {
+					panic(err.Error())
+				}
+			}
+
+			for _, property := range properties {
 
 				if val, ok := templatesMetrics[property.Name]; ok {
-					fmt.Printf(val, controller.Name, agentType, property.Value)
+					fmt.Printf(val, client.Controller.Host, acc.Name, licenseModule.Name, property.Value)
 				}
 				if property.Name == "expiry-date" {
 					value, err := strconv.ParseInt(property.Value, 10, 64)
 					if err != nil {
 						panic(err.Error())
 					}
-					fmt.Printf(templatesMetrics["hours-to-expire"], controller.Name, agentType, differenceFromNow(value))
+					hoursRemaining := differenceFromNow(value)
+					fmt.Printf(templatesMetrics["hours-to-expire"], client.Controller.Host, acc.Name, licenseModule.Name, hoursRemaining)
 				}
-
 			}
-		}
+
+		}(licenseModule)
+
+		go func(licenseModule *appdrest.LicenseModule) {
+			wg.Add(1)
+			defer wg.Done()
+			usages, err := client.Account.GetLicenseUsages(acc.ID, licenseModule.Name)
+			if err != nil {
+				if err.(*appdrest.APIError).Code != 404 {
+					panic(err.Error())
+				}
+			}
+			if len(usages) == 0 {
+				fmt.Printf(templatesMetrics["units-used"], client.Controller.Host, acc.Name, licenseModule.Name, 0)
+			} else {
+				lastUsage := usages[len(usages)-1]
+				fmt.Printf(templatesMetrics["units-used"], client.Controller.Host, acc.Name, licenseModule.Name, lastUsage.TotalUnitsUsed)
+			}
+
+		}(licenseModule)
 
 	}
-
 }
 
-func processLicenseModules(controller models.Controller, accID string) {
-	urlTemplate := "%s://%s:%d/controller/api/accounts/%s/licensemodules"
-	url := fmt.Sprintf(urlTemplate, controller.Protocol, controller.Host, controller.Port, accID)
-
-	licenseModules := new(models.LicenseModules)
-
-	fromJSONtoModel(controller, url, licenseModules)
-
-	for _, licenseModule := range licenseModules.LicenseModules {
-		wg.Add(len(licenseModule.Links))
-		for _, link := range licenseModule.Links {
-
-			go processLink(controller, licenseModule.Name, link)
-
-		}
-
-	}
-}
-
-func process(controller models.Controller) {
-	defer wg.Done()
-
-	accID := getAccountID(controller)
-	processLicenseModules(controller, accID)
-
-}
-
-func getControllersFromJSON() models.Controllers {
-	file := "./conf.json"
-	raw, err := ioutil.ReadFile(file)
-	if err != nil {
-		panic(err.Error())
-	}
-
-	var controllers models.Controllers
-	err = json.Unmarshal(raw, &controllers)
-	if err != nil {
-		panic(err.Error())
-	}
-	return controllers
-}
+var wg sync.WaitGroup
 
 func main() {
-
 	controllers := getControllersFromJSON()
-	wg.Add(len(controllers.Controllers))
-	for _, controller := range controllers.Controllers {
-		go process(controller)
+	wg.Add(len(controllers))
+
+	for _, controller := range controllers {
+		client := appdrest.NewClient(controller.Protocol, controller.Host, controller.Port, controller.User, controller.Password, controller.Account)
+		go report(client)
 	}
 	wg.Wait()
 	os.Exit(0)
