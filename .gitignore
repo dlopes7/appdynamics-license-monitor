@@ -1,3 +1,4 @@
 .DS_Store
 
-license-monitor-linux-64
+license-monitor
+conf.json 
